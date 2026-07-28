@@ -1,0 +1,9 @@
+requests
+pywebview
+customtkinter
+pdfplumber
+pypdfium2
+PyMuPDF
+Pillow
+simplekml
+google-auth

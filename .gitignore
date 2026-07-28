@@ -1,0 +1,37 @@
+# Segredos e credenciais — nunca versionar
+.env
+.env.*
+!.env.example
+credentials.json
+multia_config.json
+
+# Build e distribuição (gerados pelo PyInstaller)
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Ambiente virtual (se algum dia for criado)
+venv/
+.venv/
+env/
+
+# Saídas geradas pela análise (KML, shapefile), não são código-fonte
+*.kml
+*.shp
+*.dbf
+*.shx
+*.prj
+
+# Editor / SO
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Configuração local do Claude Code (não faz parte do projeto)
+.claude/

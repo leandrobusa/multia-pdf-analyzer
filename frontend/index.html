@@ -1,0 +1,819 @@
+<!-- v4.0.4 sidebar groups placeholder -->
+<!-- Refatoração base v4 UI -->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MultiA PDF Analyzer v3.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="app">
+
+  <button class="btn btn-accent" id="btn-tema" onclick="toggleTema()">☀️ Tema Claro</button>
+
+  <!-- ── Título ── -->
+  <div class="titulo">
+    <h1>Multi<span>A</span></h1>
+    <small>PDF Analyzer</small>
+  </div>
+
+  <!-- ── Layout principal: log (esq) + controles (dir) ── -->
+  <div class="main-layout">
+
+    <!-- COLUNA ESQUERDA: Log -->
+    <div class="col-log">
+      <div class="card" id="log-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h2 style="margin-bottom:0;">O Que Está Acontecendo</h2>
+          <button class="btn btn-primary" style="font-size:11px;padding:4px 10px;" onclick="limparLog()">🗑️ Limpar</button>
+        </div>
+        <div id="log"></div>
+      </div>
+      <div class="card" id="checklist-card" style="margin-top:10px;">
+        <h2>Checklist da Revisão</h2>
+        <div id="checklist-lista" style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;"></div>
+      </div>
+    </div>
+
+    <!-- COLUNA DIREITA: Controles + Ações -->
+    <div class="col-controls">
+
+      <!-- 1. Sistema -->
+      <div class="card">
+        <h2>Sistema</h2><div class="section-subtitle">Configuração</div>
+        <div class="radio-group">
+          <label><input type="radio" name="sistema" value="multia" checked onchange="onSistema(this.value)"> MultiA</label>
+          <label><input type="radio" name="sistema" value="multiamais" onchange="onSistema(this.value)"> MultiA Mais</label>
+        </div>
+        <div class="status-line" id="status-auth">✅ Autenticado — MultiA</div>
+        <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-outline" onclick="selecionarPastaBase()">📁 Pasta Base</button>
+          <button class="btn btn-outline" onclick="selecionarPastaCubs()">📁 Pasta CUBs</button>
+          <button class="btn btn-outline" onclick="abrirConfigAba()">📋 Aba Planilha</button>
+        </div>
+        <div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted-dark);">
+          <span id="status-pasta"></span>
+          <span id="status-cubs"></span>
+          <span id="status-aba"></span>
+        </div>
+      </div>
+
+      <!-- 2. Opção de Laudo + PDF -->
+      <div class="card">
+        <h2>2. Opção de Laudo + PDF</h2>
+        <div class="radio-group" style="margin-bottom:10px;" id="radio-tipo-laudo">
+          <label><input type="radio" name="tipo-laudo" value="normal" checked> 📄 Laudo Normal</label>
+          <label><input type="radio" name="tipo-laudo" value="antigo"> 📋 Laudo Antigo</label>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;color:white;font-size:12px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="chk-modo-multiplo" onchange="onToggleModoMultiplo(this.checked)">
+          Analisar múltiplas matrículas (mesclar em um laudo só)
+        </label>
+
+        <div id="pdf-unico-wrap">
+          <div id="drop-zone" onclick="selecionarPDF()">
+            ☁️&nbsp;&nbsp;Arraste o PDF aqui &nbsp;ou&nbsp; <strong>clique para selecionar</strong>
+          </div>
+        </div>
+
+        <div id="pdf-multiplo-wrap" style="display:none;">
+          <div id="pdfs-multiplos-lista" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;"></div>
+          <button class="btn btn-primary btn-full" onclick="adicionarPdfsMultiplos()">➕ Adicionar PDF(s) — até 10</button>
+        </div>
+
+        <button class="btn btn-accent btn-full btn-lg" id="btn-analisar" style="margin-top:8px;" onclick="analisarPDF()">
+          🤖 Analisar PDF com Gemini
+        </button>
+        <button class="btn btn-primary btn-full" id="btn-json-manual" style="margin-top:6px;" onclick="abrirJsonManual()">
+          📋 Usar JSON Manual
+        </button>
+      </div>
+
+      <!-- 3. Buscar -->
+      <div class="card">
+        <h2>3. Buscar Imóvel (Infoel)</h2>
+        <label style="color:white;font-size:12px;">Cód. Infoel:</label>
+        <div class="input-row" style="margin-top:4px;">
+          <input type="text" id="input-busca" placeholder="ex: 6362" style="flex:1;"
+                 onkeydown="if(event.key==='Enter') buscar()"/>
+          <button class="btn btn-accent" onclick="buscar()">🔍 Buscar</button>
+        </div>
+        <div class="status-line" id="status-busca"></div>
+      </div>
+
+      <!-- Ações -->
+      <div class="card" id="acoes-card">
+        <h2>Ações</h2>
+
+        <div class="acoes-section-label">Croqui</div>
+        <div class="btn-grid">
+          <button class="btn btn-accent" id="btn-kml" disabled onclick="gerarKML()">🗺️ Gerar KML</button>
+          <button class="btn btn-accent" id="btn-shp" disabled onclick="gerarSHP()">📦 Gerar SHP</button>
+        </div>
+
+        <div class="acoes-section-label">Laudo</div>
+        <div class="btn-grid">
+          <button class="btn btn-accent" id="btn-capa" disabled onclick="preencherCapa()">📋 Preencher Capa</button>
+          <button class="btn btn-accent" id="btn-parecer" disabled onclick="abrirParecer()">📝 Preencher e salvar parecer</button>
+        </div>
+        <div class="btn-grid" style="margin-top:6px;">
+          <button class="btn btn-accent" id="btn-sistemas" disabled onclick="abrirSistemas()">🔗 Sistemas Disponíveis</button>
+        </div>
+
+        <div class="acoes-section-label">Vistoria</div>
+        <div class="btn-grid">
+          <button class="btn btn-accent" id="btn-validar" onclick="validarVistoria()">✅ Marcar 'Não se aplica' e Corrigir nome das fotos</button>
+        </div>
+        <div class="btn-grid" style="margin-top:6px;">
+          <button class="btn btn-accent btn-full" id="btn-importar" disabled onclick="importarLaudo()">📥 Criar campos do laudo antigo e adicionar as fotos</button>
+        </div>
+        <div class="btn-grid" style="margin-top:6px;">
+          <button class="btn btn-accent" id="btn-trocar-fotos" onclick="abrirTrocarFotos()">✏️ Trocar nome das fotos</button>
+        </div>
+        <div class="btn-grid" style="margin-top:6px;">
+          <button class="btn btn-accent" id="btn-edificacoes" onclick="abrirEdificacoes()">🏠 Criar Edificações</button>
+          <button class="btn btn-accent" id="btn-anexar" onclick="anexarCroquiArquivos()">📎 Anexar Croqui e Arquivos</button>
+        </div>
+      </div>
+
+    </div><!-- col-controls -->
+
+  </div><!-- main-layout -->
+
+</div><!-- #app -->
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL PARECER
+════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-parecer">
+  <div class="modal">
+
+    <div class="modal-header">
+      <h3>📝 Opções do Parecer</h3>
+    </div>
+
+    <div class="modal-body" id="modal-body">
+
+      <!-- Topo: Modelo / Coop / Validade -->
+      <div class="modal-top-grid">
+        <div class="modal-top-section">
+          <label class="section-lbl">Modelo de Parecer</label>
+          <div class="form-radio-group">
+            <label><input type="radio" name="modelo-parecer" value="padrao" checked onchange="onModeloParecer(this.value)"> 📄 Modelo Padrão</label>
+            <label><input type="radio" name="modelo-parecer" value="privativo" onchange="onModeloParecer(this.value)"> 🏢 Área Privativa</label>
+          </div>
+        </div>
+        <div class="modal-top-section">
+          <label class="section-lbl">Cooperativa</label>
+          <div class="form-radio-group">
+            <label><input type="radio" name="coop" value="outra" checked onchange="onCoop(this.value)"> Outra</label>
+            <label><input type="radio" name="coop" value="maxicredito" onchange="onCoop(this.value)"> Sicoob Maxicrédito</label>
+            <label><input type="radio" name="coop" value="biomas" onchange="onCoop(this.value)"> Sicredi Biomas</label>
+            <label><input type="radio" name="coop" value="camposnovos" onchange="onCoop(this.value)"> Sicoob Campos Novos</label>
+            <label><input type="radio" name="coop" value="smo" onchange="onCoop(this.value)"> Sicoob SMO</label>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Risco Socioambiental -->
+      <div class="risco-box" id="risco-box">
+        <div class="risco-title">⚠️ Risco Socioambiental</div>
+        <div id="risco-perguntas"></div>
+        <div class="risco-obs-row">
+          <label>Observações:</label>
+          <input type="text" id="risco-obs" value="Não aplicável."/>
+        </div>
+      </div>
+
+      <!-- Painel Área Privativa -->
+      <div class="privativo-box" id="privativo-box">
+        <div class="form-section-title">Dados do Imóvel</div>
+        <div class="privativo-grid">
+          <div class="field-row">
+            <label>Identificação da Unidade:</label>
+            <input type="text" id="ap-num" placeholder="ex: Casa nº 01, Apartamento nº 302"/>
+          </div>
+          <div class="field-row">
+            <label>Nome do Edifício / Condomínio:</label>
+            <input type="text" id="ap-edificio" placeholder="ex: Condomínio Residencial Correia"/>
+          </div>
+        </div>
+
+        <!-- Vagas -->
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Vagas de Garagem:</label>
+          <div class="vagas-spinner">
+            <button onclick="ajustarVagas(-1)">−</button>
+            <span class="vagas-count" id="vagas-count">0</span>
+            <button onclick="ajustarVagas(1)">+</button>
+          </div>
+          <div id="vagas-entradas"></div>
+        </div>
+
+        <div class="form-section-title" style="margin-top:14px;">Dados do Parágrafo 2 (empreendimento)</div>
+        <div class="privativo-grid">
+          <div class="field-row">
+            <label>Nome do Empreendimento:</label>
+            <input type="text" id="ap-empreendimento" placeholder="ex: La Victoria Residence"/>
+          </div>
+          <div class="field-row">
+            <label>Construtora:</label>
+            <input type="text" id="ap-construtora" placeholder="ex: KMK Empreendimentos"/>
+          </div>
+          <div class="field-row">
+            <label>Ano de Entrega:</label>
+            <input type="text" id="ap-ano" placeholder="ex: 2021"/>
+          </div>
+          <div class="field-row">
+            <label>Distância do Mar (opcional):</label>
+            <input type="text" id="ap-dist-mar" placeholder="ex: 170 metros"/>
+          </div>
+        </div>
+
+        <div class="form-section-title" style="margin-top:10px;">Infraestrutura de Lazer:</div>
+        <div class="lazer-grid" id="lazer-grid"></div>
+        <div style="margin-top:6px;">
+          <label style="font-size:12px;color:var(--text-muted);">Outros itens de lazer (opcional):</label>
+          <input type="text" id="ap-lazer-livre" style="width:100%;margin-top:3px;" placeholder="ex: academia, sauna"/>
+        </div>
+
+        <div class="form-section-title" style="margin-top:12px;">Distâncias</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+          <div class="field-row" style="flex:1;min-width:160px;">
+            <label>Distância à Rodovia:</label>
+            <input type="text" id="ap-dist-rodovia" placeholder="ex: 5,3 km"/>
+          </div>
+          <div class="field-row" style="flex:1;min-width:160px;">
+            <label>Distância ao Centro:</label>
+            <input type="text" id="ap-dist-centro" placeholder="ex: 6,0 km"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2 colunas de opções -->
+      <div class="form-cols" id="form-cols">
+        <div id="col-esquerda"></div>
+        <div id="col-direita"></div>
+      </div>
+
+      <!-- Coordenadas + Fonte do Croqui -->
+      <div class="form-section">
+        <div class="form-section-title">Coordenadas do Imóvel</div>
+        <label style="font-size:12px;color:var(--text-muted);">Cole aqui a coordenada coletada em campo (será salva na capa):</label>
+        <input type="text" id="coordenadas-manual" style="width:100%;margin-top:4px;" placeholder="ex: -27.123456, -50.654321"/>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Fonte do Croqui</div>
+        <div class="custom-select-wrap" id="fonte-croqui-wrap">
+          <div class="custom-select-input-row">
+            <input type="text" id="fonte-croqui" autocomplete="off"
+                   style="width:100%;" placeholder="Selecione ou digite a fonte do croqui..."
+                   oninput="filtrarFonteCroqui(this.value)"
+                   onfocus="abrirFonteCroqui()"
+                   onblur="setTimeout(()=>fecharFonteCroqui(),200)"/>
+            <span class="custom-select-arrow" onclick="toggleFonteCroqui()">▼</span>
+          </div>
+          <div class="custom-select-dropdown" id="fonte-croqui-dropdown" style="display:none;"></div>
+        </div>
+      </div>
+
+      <!-- Infraestrutura -->
+      <div class="form-section">
+        <div class="form-section-title">Infraestrutura da Região</div>
+        <small style="color:var(--text-muted);">Itens marcados serão incluídos no parecer:</small>
+        <div class="infra-list" id="infra-list" style="margin-top:6px;"></div>
+      </div>
+
+      <!-- Uso das terras (rural) -->
+      <div class="form-section" id="uso-terras-section" style="display:none;">
+        <div class="form-section-title">
+          Uso Atual das Terras <span style="color:var(--red);font-size:11px;">* Obrigatório para rural</span>
+        </div>
+        <div class="form-check-group" id="uso-terras-checks" style="flex-direction:row;flex-wrap:wrap;gap:4px 16px;"></div>
+      </div>
+
+      <!-- Divisões de área -->
+      <div class="form-section">
+        <div class="form-section-title">A área de terras tem quais divisões?</div>
+
+        <div class="form-radio-group" id="modo-area-wrap" style="display:none;margin-bottom:10px;flex-direction:row;gap:16px;">
+          <label><input type="radio" name="modo-area" value="somar" checked onchange="onModoArea('somar')"> Somar as áreas (um terreno só)</label>
+          <label><input type="radio" name="modo-area" value="dividir" onchange="onModoArea('dividir')"> Manter separado por matrícula</label>
+        </div>
+
+        <div id="divisoes-somar-wrap">
+          <small style="color:var(--text-muted);">Selecione as divisões. Se mais de uma, informe a área de cada uma:</small>
+          <div class="divisoes-check-list" id="divisoes-checks" style="margin-top:8px;"></div>
+          <div class="divisoes-entradas" id="divisoes-entradas"></div>
+        </div>
+
+        <div id="divisoes-por-matricula-wrap" style="display:none;"></div>
+      </div>
+
+      <!-- Observações opcionais -->
+      <div class="form-section">
+        <div class="form-section-title">Observações Opcionais</div>
+        <div class="obs-list" id="obs-list"></div>
+        <div style="margin-top:10px;">
+          <label style="font-size:13px;font-weight:600;color:var(--primary);">Observação adicional:</label>
+          <input type="text" id="obs-adicional" style="width:100%;margin-top:4px;" placeholder="Digite aqui a observação adicional..."/>
+        </div>
+      </div>
+
+      <!-- ── Análise Jurídica (apenas Maxicrédito) ───────────────── -->
+      <div class="form-section" id="av-juridica-box" style="display:none;border:1.5px solid #c0392b;border-radius:8px;padding:12px 14px;">
+        <div class="form-section-title" style="color:#c0392b;">⚖️ Análise Jurídica — Ônus e Restrições</div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Itens marcados serão incluídos no parecer:</p>
+        <div id="av-juridica-lista"></div>
+      </div>
+
+    </div><!-- modal-body -->
+
+    <div class="modal-footer">
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="fecharParecer()">Cancelar</button>
+        <button class="btn btn-accent btn-lg" style="flex:3;" onclick="salvarParecer()">✅ Gerar e Salvar Parecer</button>
+      </div>
+    </div>
+
+  </div><!-- .modal -->
+</div><!-- #modal-parecer -->
+
+<!-- Modal de confirmação genérico -->
+<div class="confirm-modal" id="confirm-modal">
+  <div class="confirm-box">
+    <h4 id="confirm-title">Confirmar</h4>
+    <p id="confirm-msg"></p>
+    <div class="confirm-btns">
+      <button class="btn btn-primary" onclick="confirmRespond(false)">Cancelar</button>
+      <button class="btn btn-accent" onclick="confirmRespond(true)">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL EDIFICAÇÕES
+════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-edificacoes">
+  <div class="modal" style="max-width:900px;">
+
+    <div class="modal-header">
+      <h3>🏠 Criar Edificações</h3>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- Modelo -->
+      <div class="form-section">
+        <div class="form-section-title">Modelo</div>
+        <div class="form-radio-group" style="flex-direction:row;gap:20px;">
+          <label><input type="radio" name="ed-modelo" value="padrao" checked onchange="onEdModelo(this.value)"> 🏠 Modelo Padrão</label>
+          <label><input type="radio" name="ed-modelo" value="privativo" onchange="onEdModelo(this.value)"> 🏢 Área Privativa</label>
+        </div>
+      </div>
+
+      <!-- Cabeçalho -->
+      <div class="form-section">
+        <div class="form-section-title">Identificação</div>
+        <div class="privativo-grid">
+          <div class="field-row">
+            <label>Nome da Edificação: <span style="color:var(--red)">*</span></label>
+            <input type="text" id="ed-nome" placeholder="ex: Casa, Galpão, Apartamento nº 302"/>
+          </div>
+          <div class="field-row" id="ed-averbado-row">
+            <label>Averbação:</label>
+            <div class="form-radio-group" style="flex-direction:row;gap:16px;margin-top:4px;">
+              <label><input type="radio" name="ed-averbado" value="N" checked> Não Averbada</label>
+              <label><input type="radio" name="ed-averbado" value="S"> Averbada</label>
+            </div>
+          </div>
+          <div class="field-row">
+            <label>Área (m²):</label>
+            <input type="text" id="ed-area" placeholder="ex: 120,00"/>
+          </div>
+          <div class="field-row">
+            <label>Tipo de Edificação:</label>
+            <select id="ed-tipo" onchange="onEdTipo(this.value)" style="width:100%;">
+              <option value="residencial">Residencial</option>
+              <option value="nao_residencial">Não Residencial</option>
+              <option value="misto">Misto</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dados área privativa (pavimento + áreas) -->
+      <div class="form-section" id="ed-privativo-dados" style="display:none;">
+        <div class="form-section-title">Dados da Unidade (Área Privativa)</div>
+        <div class="privativo-grid">
+          <div class="field-row">
+            <label>Pavimento (opcional):</label>
+            <input type="text" id="ed-pavimento" placeholder="ex: 3"/>
+          </div>
+          <div class="field-row">
+            <label>Nome do Edifício/Condomínio:</label>
+            <input type="text" id="ed-edificio" placeholder="ex: Condomínio Residencial Correia"/>
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:6px;">Áreas (adicione cada tipo presente na matrícula):</label>
+          <div id="ed-areas-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+          <button class="btn btn-primary" style="margin-top:8px;padding:5px 12px;font-size:12px;" onclick="addAreaPrivativa()">+ Adicionar área</button>
+        </div>
+        <!-- Cômodos texto livre -->
+        <div style="margin-top:10px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Composição do imóvel (texto livre, opcional):</label>
+          <input type="text" id="ed-comodos-texto" style="width:100%;" placeholder="ex: três suítes e um living integrado, que inclui cozinha, sala de jantar e estar"/>
+        </div>
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Extras (texto livre, opcional):</label>
+          <input type="text" id="ed-extras-texto" style="width:100%;" placeholder="ex: sacada envidraçada com churrasqueira, lavabo e área de serviço"/>
+        </div>
+      </div>
+
+      <!-- Cômodos modelo privativo -->
+      <div class="form-section" id="ed-privativo-comodos" style="display:none;">
+        <div class="form-section-title">Cômodos (opcional)</div>
+        <div id="ed-privativo-comodos-grid" class="privativo-grid"></div>
+      </div>
+
+      <!-- Material + Cômodos (modelo padrão) -->
+      <div id="ed-padrao-campos">
+        <div class="form-section">
+          <div class="form-section-title">Material e Composição</div>
+          <div class="privativo-grid">
+            <div class="field-row">
+              <label>Material: <span style="color:var(--red)">*</span></label>
+              <select id="ed-material" style="width:100%;">
+                <option value="">Selecione...</option>
+                <option value="Madeira">Madeira</option>
+                <option value="Alvenaria">Alvenaria</option>
+                <option value="Mista">Mista</option>
+                <option value="Tijolos à Vista">Tijolos à Vista</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Cômodos com quantidade -->
+          <div style="margin-top:10px;">
+            <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:6px;">Cômodos Internos (opcional):</label>
+            <div id="ed-comodos-grid" class="privativo-grid"></div>
+          </div>
+
+          <!-- Externos -->
+          <div style="margin-top:10px;">
+            <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Áreas Externas (opcional):</label>
+            <div class="form-check-group" style="flex-direction:row;flex-wrap:wrap;gap:4px 16px;">
+              <label><input type="checkbox" name="ed-externo" value="área de festas"> área de festas</label>
+              <label><input type="checkbox" name="ed-externo" value="playground"> playground</label>
+              <label><input type="checkbox" name="ed-externo" value="piscina"> piscina</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Acabamentos (ambos modelos) -->
+      <div class="form-section">
+        <div class="form-section-title">Acabamentos</div>
+        <div class="privativo-grid">
+          <div class="field-row" id="ed-padrao-const-row">
+            <label>Padrão Construtivo: <span style="color:var(--red)">*</span></label>
+            <select id="ed-padrao-const" style="width:100%;">
+              <option value="">Selecione...</option>
+              <option>Alto</option>
+              <option>Médio/Alto</option>
+              <option>Médio</option>
+              <option>Médio/Baixo</option>
+              <option>Baixo</option>
+            </select>
+          </div>
+          <div class="field-row" id="ed-padrao-acab-row">
+            <label>Padrão de Acabamentos:</label>
+            <select id="ed-padrao-acab" style="width:100%;">
+              <option value="">Selecione...</option>
+              <option>Alto</option>
+              <option>Médio/Alto</option>
+              <option>Médio</option>
+              <option>Médio/Baixo</option>
+              <option>Baixo</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Paredes internas -->
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Paredes Internas (opcional):</label>
+          <div class="form-check-group" style="flex-direction:row;flex-wrap:wrap;gap:4px 16px;">
+            <label><input type="checkbox" name="ed-parede" value="massa corrida"> massa corrida</label>
+            <label><input type="checkbox" name="ed-parede" value="madeira"> madeira</label>
+          </div>
+          <input type="text" id="ed-parede-livre" style="width:100%;margin-top:4px;" placeholder="Outro material de parede (opcional)"/>
+        </div>
+
+        <!-- Cobertura (só modelo padrão) -->
+        <div style="margin-top:8px;" id="ed-cobertura-row">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Cobertura (opcional):</label>
+          <div class="form-radio-group" style="flex-direction:row;gap:16px;">
+            <label><input type="radio" name="ed-cobertura" value=""> Nenhuma</label>
+            <label><input type="radio" name="ed-cobertura" value="telhas de barro"> Telhas de Barro</label>
+            <label><input type="radio" name="ed-cobertura" value="fibrocimento"> Fibrocimento</label>
+            <label><input type="radio" name="ed-cobertura" value="aluzinco"> Aluzinco</label>
+          </div>
+        </div>
+
+        <!-- Aberturas -->
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Aberturas (opcional):</label>
+          <div class="form-check-group" style="flex-direction:row;gap:16px;">
+            <label><input type="checkbox" name="ed-abertura" value="alumínio"> alumínio</label>
+            <label><input type="checkbox" name="ed-abertura" value="madeira"> madeira</label>
+            <label><input type="checkbox" name="ed-abertura" value="vidro"> vidro</label>
+          </div>
+        </div>
+
+        <!-- Grades -->
+        <div style="margin-top:6px;" id="ed-grades-row">
+          <label style="font-size:12px;color:var(--text);">
+            <input type="checkbox" id="ed-grades"> As janelas possuem grades de segurança em ferro
+          </label>
+        </div>
+
+        <!-- Piso -->
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Revestimento do Piso (opcional):</label>
+          <div class="form-check-group" style="flex-direction:row;flex-wrap:wrap;gap:4px 14px;">
+            <label><input type="checkbox" name="ed-piso" value="cerâmica"> cerâmica</label>
+            <label><input type="checkbox" name="ed-piso" value="porcelanato"> porcelanato</label>
+            <label><input type="checkbox" name="ed-piso" value="laminado"> laminado</label>
+            <label><input type="checkbox" name="ed-piso" value="parquet"> parquet</label>
+            <label><input type="checkbox" name="ed-piso" value="concreto"> concreto</label>
+            <label><input type="checkbox" name="ed-piso" value="concreto polido"> concreto polido</label>
+            <label><input type="checkbox" name="ed-piso" value="cimento queimado"> cimento queimado</label>
+          </div>
+          <input type="text" id="ed-piso-livre" style="width:100%;margin-top:4px;" placeholder="Outro revestimento de piso (opcional)"/>
+        </div>
+
+        <!-- Teto -->
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Teto (opcional):</label>
+          <div class="form-check-group" style="flex-direction:row;flex-wrap:wrap;gap:4px 14px;">
+            <label><input type="checkbox" name="ed-teto" value="gesso"> gesso</label>
+            <label><input type="checkbox" name="ed-teto" value="laje"> laje</label>
+            <label><input type="checkbox" name="ed-teto" value="madeira"> madeira</label>
+            <label><input type="checkbox" name="ed-teto" value="PVC"> PVC</label>
+          </div>
+          <input type="text" id="ed-teto-livre" style="width:100%;margin-top:4px;" placeholder="Outro material de teto (opcional)"/>
+        </div>
+
+        <!-- Conservação pintura (só padrão) -->
+        <div style="margin-top:8px;" id="ed-cons-pintura-row">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Estado de Conservação da Pintura (opcional):</label>
+          <div class="form-radio-group" style="flex-direction:row;gap:16px;">
+            <label><input type="radio" name="ed-cons-pintura" value=""> Nenhum</label>
+            <label><input type="radio" name="ed-cons-pintura" value="Ótimo"> Ótimo</label>
+            <label><input type="radio" name="ed-cons-pintura" value="Bom"> Bom</label>
+            <label><input type="radio" name="ed-cons-pintura" value="Regular"> Regular</label>
+            <label><input type="radio" name="ed-cons-pintura" value="Irregular"> Irregular</label>
+          </div>
+        </div>
+
+        <!-- Conservação geral -->
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px;">Estado de Conservação Geral: <span style="color:var(--red)">*</span></label>
+          <div class="form-radio-group" style="flex-direction:row;gap:16px;">
+            <label><input type="radio" name="ed-cons-geral" value=""> Selecione</label>
+            <label><input type="radio" name="ed-cons-geral" value="Ótimo"> Ótimo</label>
+            <label><input type="radio" name="ed-cons-geral" value="Bom"> Bom</label>
+            <label><input type="radio" name="ed-cons-geral" value="Regular"> Regular</label>
+            <label><input type="radio" name="ed-cons-geral" value="Irregular"> Irregular</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Observação fotos -->
+      <div class="form-section">
+        <label style="font-size:13px;color:var(--text);">
+          <input type="checkbox" id="ed-obs-fotos">
+          <span id="ed-obs-fotos-label">Não foi possível tirar fotos internas, o que impossibilitou a verificação das condições de habitabilidade.</span>
+        </label>
+      </div>
+
+      <!-- Habitabilidade / Uso -->
+      <div class="form-section" id="ed-habitabilidade-section">
+        <div class="form-section-title">Condição de Habitabilidade</div>
+        <div class="form-radio-group" style="flex-direction:row;flex-wrap:wrap;gap:6px 16px;">
+          <label><input type="radio" name="ed-hab" value="" checked> Não informar</label>
+          <label><input type="radio" name="ed-hab" value="Habitável" onchange="onEdHab(this.value)"> Habitável</label>
+          <label><input type="radio" name="ed-hab" value="Habitável com Ressalvas" onchange="onEdHab(this.value)"> Habitável com Ressalvas</label>
+          <label><input type="radio" name="ed-hab" value="Inabitável" onchange="onEdHab(this.value)"> Inabitável</label>
+        </div>
+        <input type="text" id="ed-hab-motivo" style="width:100%;margin-top:6px;display:none;" placeholder="Motivo (obrigatório para ressalvas ou inabitável)"/>
+      </div>
+
+      <div class="form-section" id="ed-uso-section" style="display:none;">
+        <div class="form-section-title">Condição de Uso</div>
+        <div class="form-radio-group" style="flex-direction:row;flex-wrap:wrap;gap:6px 16px;">
+          <label><input type="radio" name="ed-uso" value="" checked> Não informar</label>
+          <label><input type="radio" name="ed-uso" value="Possui condições de uso" onchange="onEdUso(this.value)"> Possui condições de uso</label>
+          <label><input type="radio" name="ed-uso" value="Possui condições de uso com ressalvas" onchange="onEdUso(this.value)"> Com Ressalvas</label>
+          <label><input type="radio" name="ed-uso" value="Não possui condições de uso" onchange="onEdUso(this.value)"> Não possui condições de uso</label>
+        </div>
+        <input type="text" id="ed-uso-motivo" style="width:100%;margin-top:6px;display:none;" placeholder="Motivo (obrigatório para ressalvas ou não possui)"/>
+      </div>
+
+      <!-- Preview do texto -->
+      <div class="form-section">
+        <div class="form-section-title">Prévia do Texto</div>
+        <textarea id="ed-preview" style="width:100%;min-height:120px;resize:vertical;font-size:12px;line-height:1.6;" placeholder="O texto será gerado automaticamente conforme você preenche os campos acima..." oninput="this.dataset.manualEdit='true'; document.getElementById('ed-preview-aviso').style.display='block';"></textarea>
+        <div id="ed-preview-aviso" style="display:none;font-size:11px;color:#d97706;margin-top:3px;">✏️ Texto editado manualmente — clique em "Atualizar Prévia" para regenerar a partir dos campos.</div>
+        <button class="btn btn-primary" style="margin-top:6px;font-size:12px;padding:5px 14px;" onclick="gerarPreviewEdificacao(); document.getElementById('ed-preview-aviso').style.display='none';">🔄 Atualizar Prévia</button>
+      </div>
+
+      <!-- Lista de edificações adicionadas -->
+      <div class="form-section" id="ed-lista-section" style="display:none;">
+        <div class="form-section-title">Edificações a Criar</div>
+        <div id="ed-lista"></div>
+      </div>
+
+    </div><!-- modal-body -->
+
+    <div class="modal-footer">
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" onclick="fecharEdificacoes()">Cancelar</button>
+        <button class="btn btn-accent" onclick="adicionarEdificacao()">+ Adicionar à Lista</button>
+        <button class="btn btn-accent btn-lg" style="flex:2;" id="btn-criar-todas" disabled onclick="criarTodasEdificacoes()">🏠 Criar Todas</button>
+      </div>
+    </div>
+
+  </div>
+</div><!-- #modal-edificacoes -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL SISTEMAS DE CONSULTA
+════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-sistemas">
+  <div class="modal" style="max-width:680px;">
+    <div class="modal-header">
+      <h3 id="sistemas-titulo">🔗 Sistemas Disponíveis para Consulta</h3>
+    </div>
+    <div class="modal-body" id="sistemas-body">
+      <div id="sistemas-loading" style="text-align:center;padding:20px;color:var(--text-muted);">
+        Buscando sistemas...
+      </div>
+      <div id="sistemas-lista" style="display:none;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary btn-full" onclick="fecharSistemas()">Fechar</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL JSON MANUAL
+════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-json-manual">
+  <div class="modal" style="max-width:820px;">
+    <div class="modal-header">
+      <h3>📋 Inserir JSON Manual</h3>
+    </div>
+    <div class="modal-body">
+
+      <div class="form-section">
+        <div class="form-section-title">Tipo de Laudo</div>
+        <div class="form-radio-group" style="flex-direction:row;gap:20px;">
+          <label><input type="radio" name="json-tipo" value="normal" checked> 📄 Laudo Normal</label>
+          <label><input type="radio" name="json-tipo" value="antigo"> 📋 Laudo Antigo</label>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Prompt para copiar</div>
+        <small style="color:var(--text-muted);">Copie o prompt abaixo, cole junto com o PDF na IA de sua preferência e cole o JSON retornado no campo abaixo.</small>
+        <div style="position:relative;margin-top:6px;">
+          <textarea id="json-prompt-display" readonly
+            style="width:100%;height:140px;resize:none;font-size:11px;font-family:monospace;background:#f8f8f8;"></textarea>
+          <button class="btn btn-primary" style="position:absolute;top:6px;right:6px;font-size:11px;padding:4px 10px;"
+            onclick="copiarPrompt()">📋 Copiar</button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Cole o JSON aqui</div>
+        <textarea id="json-manual-input"
+          style="width:100%;height:200px;resize:vertical;font-size:12px;font-family:monospace;"
+          placeholder='Cole aqui o JSON retornado pela IA...&#10;&#10;Exemplo: {"cri": "...", "proprietarios": [...], "endereco": "...", ...}'></textarea>
+      </div>
+
+      <div id="json-erro" style="display:none;color:var(--red);font-size:13px;padding:8px;background:#fff0f0;border-radius:5px;"></div>
+
+    </div>
+    <div class="modal-footer">
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="fecharJsonManual()">Cancelar</button>
+        <button class="btn btn-accent btn-lg" style="flex:3;" onclick="processarJsonManual()">✅ Processar JSON</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Modal Aba Planilha -->
+<div class="modal-overlay" id="modal-aba">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-header"><h3>📋 Configurar Aba da Planilha</h3></div>
+    <div class="modal-body">
+      <div class="form-section">
+        <div class="form-section-title">Nome da Aba</div>
+        <small style="color:var(--text-muted);">Digite o nome exato da sua aba na Planilha de KPI'S</small>
+        <input type="text" id="input-aba" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;" placeholder="">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" style="flex:1" onclick="fecharConfigAba()">Cancelar</button>
+        <button class="btn btn-accent" style="flex:2" onclick="salvarAba()">✅ Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL OBSERVAÇÕES — LAUDO ANTIGO
+════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-obs-antigo">
+  <div class="modal" style="max-width:620px;">
+    <div class="modal-header">
+      <h3>📝 Observações do Laudo</h3>
+    </div>
+    <div class="modal-body">
+      <div class="form-section">
+        <div class="form-section-title">Observações opcionais</div>
+        <div id="obs-antigo-lista" style="max-height:220px;overflow-y:auto;padding:4px 0;"></div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Observação adicional (opcional)</div>
+        <textarea id="obs-antigo-adicional" rows="3"
+          style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;resize:vertical;"
+          placeholder="Digite uma observação adicional..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" style="flex:1" onclick="fecharObsAntigo()">Pular</button>
+        <button class="btn btn-accent btn-lg" style="flex:3" id="obs-antigo-confirmar" onclick="confirmarObsAntigo()">✅ Confirmar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     MODAL TROCAR NOME DAS FOTOS
+════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-trocar-fotos">
+  <div class="modal" style="max-width:620px;">
+    <div class="modal-header">
+      <h3>✏️ Trocar Nome das Fotos</h3>
+    </div>
+    <div class="modal-body">
+      <div id="trocar-fotos-loading" style="text-align:center;padding:20px;color:var(--text-muted);">
+        Carregando fotos da vistoria...
+      </div>
+      <div id="trocar-fotos-conteudo" style="display:none;">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+          Selecione as fotos que deseja renomear e informe o novo nome:
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+          <input type="text" id="trocar-fotos-novo-nome" placeholder="Novo nome para as fotos selecionadas..."
+            style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;"/>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <button class="btn btn-accent" style="font-size:12px;padding:4px 10px;" onclick="trocarFotosSelecionarTodos(true)">☑ Selecionar todos</button>
+          <button class="btn btn-accent" style="font-size:12px;padding:4px 10px;" onclick="trocarFotosSelecionarTodos(false)">☐ Desmarcar todos</button>
+        </div>
+        <div id="trocar-fotos-lista" style="max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="fecharTrocarFotos()">Cancelar</button>
+        <button class="btn btn-accent btn-lg" style="flex:3;" id="btn-confirmar-trocar" onclick="confirmarTrocarFotos()">✅ Renomear Selecionadas</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
