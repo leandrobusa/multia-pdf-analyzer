@@ -33,6 +33,32 @@ _ERROS_RETRY    = frozenset({429, 500, 502, 503, 504})
 _MAX_TENTATIVAS = 5
 _BASE_URL       = "https://generativelanguage.googleapis.com"
 
+# Limite máximo de tokens de saída por modelo — evita resposta cortada no meio
+# (JSON incompleto) em documentos grandes, com muitas averbações/coordenadas.
+_MAX_OUTPUT_TOKENS = {
+    "gemini-2.5-flash": 65536,
+    "gemini-2.0-flash": 8192,
+}
+
+
+def _generation_config(modelo: str) -> dict:
+    """Monta o generationConfig apropriado para o modelo.
+
+    O gemini-2.5-flash é um modelo "thinking" — por padrão reserva parte do
+    limite de tokens para raciocínio interno antes de responder, o que em
+    documentos grandes pode consumir boa parte do limite e cortar o JSON no
+    meio. Como a tarefa aqui é extração fiel de dados (não raciocínio
+    complexo), desligamos o "pensamento" para liberar o limite inteiro
+    para a resposta em si.
+    """
+    config = {
+        "responseMimeType": "application/json",
+        "maxOutputTokens": _MAX_OUTPUT_TOKENS.get(modelo, 8192),
+    }
+    if modelo.startswith("gemini-2.5"):
+        config["thinkingConfig"] = {"thinkingBudget": 0}
+    return config
+
 
 # ---------------------------------------------------------------------------
 # Utilitários internos
@@ -78,6 +104,18 @@ def _com_retry(fn, *args, **kwargs) -> Any:
             else:
                 raise
     raise RuntimeError(f"Operação falhou após {_MAX_TENTATIVAS} tentativas. Último erro: {ultimo_erro}")
+
+
+def _checar_truncamento(resposta_bruta: dict) -> None:
+    """Levanta erro claro se a resposta foi cortada por estourar o limite de tokens
+    de saída, em vez de deixar o parsing de JSON falhar com erro genérico.
+    """
+    candidatos = resposta_bruta.get("candidates") or []
+    if candidatos and candidatos[0].get("finishReason") == "MAX_TOKENS":
+        raise RuntimeError(
+            "Resposta cortada por estourar o limite de tokens de saída — "
+            "documento provavelmente grande demais (muitas averbações/coordenadas)."
+        )
 
 
 def _extrair_json(texto: str) -> dict:
@@ -195,7 +233,8 @@ def _gerar(file_uri: str, prompt: str, modelo: str) -> dict:
                 {"file_data": {"mime_type": "application/pdf", "file_uri": file_uri}},
                 {"text": prompt},
             ]
-        }]
+        }],
+        "generationConfig": _generation_config(modelo),
     }
 
     def _fazer_geracao():
@@ -229,13 +268,16 @@ def chamar_gemini(pdf_bytes: bytes, prompt: str) -> dict:
     file_uri   = _upload_pdf(pdf_bytes)
     _aguardar_ativo(file_uri)
 
-    resposta_bruta = None
-    ultimo_erro    = None
+    dados       = None
+    ultimo_erro = None
 
     for modelo in _MODELOS:
         try:
             _log(f"   Gerando com {modelo}...")
             resposta_bruta = _gerar(file_uri, prompt, modelo)
+            _checar_truncamento(resposta_bruta)
+            texto = resposta_bruta["candidates"][0]["content"]["parts"][0]["text"]
+            dados = _extrair_json(texto)
             _log(f"   Resposta recebida de {modelo}")
             break
         except Exception as exc:
@@ -244,11 +286,10 @@ def chamar_gemini(pdf_bytes: bytes, prompt: str) -> dict:
 
     _deletar(file_uri)
 
-    if resposta_bruta is None:
+    if dados is None:
         raise RuntimeError(f"Todos os modelos falharam. Último erro: {ultimo_erro}")
 
-    texto = resposta_bruta["candidates"][0]["content"]["parts"][0]["text"]
-    return _extrair_json(texto)
+    return dados
 
 
 def chamar_gemini_multiplo(lista_pdf_bytes: list[bytes], prompt: str) -> dict:
@@ -281,9 +322,12 @@ def chamar_gemini_multiplo(lista_pdf_bytes: list[bytes], prompt: str) -> dict:
 
         parts = [{"file_data": {"mime_type": "application/pdf", "file_uri": uri}} for uri in file_uris]
         parts.append({"text": prompt})
-        payload = {"contents": [{"parts": parts}]}
 
         def _fazer_geracao(modelo):
+            payload = {
+                "contents": [{"parts": parts}],
+                "generationConfig": _generation_config(modelo),
+            }
             resp = requests.post(
                 f"{_BASE_URL}/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}",
                 json=payload, timeout=(10, 300),
@@ -291,23 +335,25 @@ def chamar_gemini_multiplo(lista_pdf_bytes: list[bytes], prompt: str) -> dict:
             resp.raise_for_status()
             return resp.json()
 
-        resposta_bruta = None
-        ultimo_erro    = None
+        dados       = None
+        ultimo_erro = None
         for modelo in _MODELOS:
             try:
                 _log(f"   Gerando com {modelo}...")
                 resposta_bruta = _com_retry(_fazer_geracao, modelo)
+                _checar_truncamento(resposta_bruta)
+                texto = resposta_bruta["candidates"][0]["content"]["parts"][0]["text"]
+                dados = _extrair_json(texto)
                 _log(f"   Resposta recebida de {modelo}")
                 break
             except Exception as exc:
                 _log(f"   {modelo} falhou: {exc} — tentando próximo modelo...")
                 ultimo_erro = exc
 
-        if resposta_bruta is None:
+        if dados is None:
             raise RuntimeError(f"Todos os modelos falharam. Último erro: {ultimo_erro}")
 
-        texto = resposta_bruta["candidates"][0]["content"]["parts"][0]["text"]
-        return _extrair_json(texto)
+        return dados
     finally:
         for uri in file_uris:
             _deletar(uri)
@@ -351,6 +397,7 @@ def chamar_gemini_azimutes(pdf_bytes: bytes) -> dict:
         return {}
 
     try:
+        _checar_truncamento(resposta_bruta)
         texto = resposta_bruta["candidates"][0]["content"]["parts"][0]["text"]
         return _extrair_json(texto)
     except Exception as exc:

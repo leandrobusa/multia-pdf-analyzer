@@ -376,3 +376,190 @@ def montar_coordenadas_de_azimutes(dados_pdf: dict) -> Optional[dict]:
     except Exception as exc:
         print(f"[coordenadas] Erro ao calcular polígono por azimutes: {exc}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Croqui a partir de confrontações (frente/direita/fundos/esquerda) + ângulos
+# ---------------------------------------------------------------------------
+
+_LADOS_CONFRONTACAO   = ("frente", "direita", "fundos", "esquerda")
+_VERTICES_ANGULO      = ("frente_direita", "direita_fundos", "fundos_esquerda", "esquerda_frente")
+
+
+def _medida_para_metros(valor: Any) -> Optional[float]:
+    """Extrai o valor numérico (em metros) de uma string tipo '5,05 metros'.
+
+    Args:
+        valor: String ou número com a medida.
+
+    Returns:
+        Valor em metros, ou None se não for possível interpretar.
+    """
+    if valor is None:
+        return None
+    m = re.search(r"\d+(?:[.,]\d+)?", str(valor))
+    if not m:
+        return None
+    return float(m.group(0).replace(",", "."))
+
+
+def calcular_poligono_confrontacoes(
+    confrontacoes: Optional[dict],
+    angulos_internos: Optional[dict],
+) -> Optional[tuple[list[tuple[float, float]], bool]]:
+    """Calcula os vértices reais do polígono (plano local, sem georreferência)
+    a partir das medidas de frente/direita/fundos/esquerda e dos ângulos
+    internos de cada vértice.
+
+    Quando um ângulo não é informado no documento, assume-se 90° (canto reto)
+    nesse vértice — é o caso mais comum para lote urbano. O retorno indica se
+    algum ângulo foi assumido, para que o desenho final sinalize a aproximação.
+
+    Args:
+        confrontacoes: Dict {lado: {medida, descricao}} para os 4 lados.
+        angulos_internos: Dict com os ângulos internos informados no documento
+            (formato 'XXXdYYmZZs'), com apenas as chaves conhecidas — as que
+            faltarem são assumidas como 90°. Pode ser None.
+
+    Returns:
+        Tupla (vertices, aproximado): vertices é a lista com os 4 vértices
+        (x, y) do polígono, na ordem frente → direita → fundos → esquerda;
+        aproximado é True se algum ângulo foi assumido em vez de vir do
+        documento. Retorna None se faltar alguma medida de lado ou se o
+        polígono resultante não fechar dentro de uma tolerância aceitável.
+    """
+    if not confrontacoes:
+        return None
+
+    try:
+        medidas = []
+        for lado in _LADOS_CONFRONTACAO:
+            metros = _medida_para_metros((confrontacoes.get(lado) or {}).get("medida"))
+            if not metros or metros <= 0:
+                return None
+            medidas.append(metros)
+
+        angulos = []
+        aproximado = False
+        for chave in _VERTICES_ANGULO:
+            valor = (angulos_internos or {}).get(chave)
+            if valor:
+                angulos.append(_parsear_azimute(str(valor)))
+            else:
+                angulos.append(90.0)
+                aproximado = True
+    except (ValueError, AttributeError):
+        return None
+
+    x, y = 0.0, 0.0
+    heading = 0.0
+    pontos = [(x, y)]
+    for medida, angulo_interno in zip(medidas, angulos):
+        rad = math.radians(heading)
+        x += medida * math.cos(rad)
+        y += medida * math.sin(rad)
+        pontos.append((round(x, 3), round(y, 3)))
+        heading += 180.0 - angulo_interno
+
+    fechamento = math.hypot(pontos[-1][0] - pontos[0][0], pontos[-1][1] - pontos[0][1])
+    if fechamento > max(medidas) * 0.10:
+        return None  # medidas/ângulos não fecham um polígono minimamente coerente
+
+    return pontos[:-1], aproximado
+
+
+def _escapar_svg(texto: Any) -> str:
+    """Escapa caracteres especiais de XML/SVG em texto livre."""
+    return str(texto).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def gerar_svg_confrontacoes(
+    vertices: list[tuple[float, float]],
+    confrontacoes: dict,
+    distancia_esquina: Optional[dict] = None,
+    numero_matricula: str = "",
+    aproximado: bool = False,
+) -> str:
+    """Gera o SVG do croqui a partir do polígono real calculado.
+
+    Args:
+        vertices: 4 vértices (x, y) na ordem frente, direita, fundos, esquerda.
+        confrontacoes: Dict {lado: {medida, descricao}}.
+        distancia_esquina: Dict {distancia_m, referencia} ou None.
+        numero_matricula: Número da matrícula, usado no título.
+        aproximado: True se algum ângulo interno foi assumido como reto (90°)
+            por não estar descrito no documento — exibe um aviso no desenho.
+
+    Returns:
+        String SVG completa, pronta para salvar em arquivo.
+    """
+    if len(vertices) != 4:
+        raise ValueError("São esperados exatamente 4 vértices.")
+
+    xs = [p[0] for p in vertices]
+    ys = [p[1] for p in vertices]
+    largura_real = max(max(xs) - min(xs), 0.01)
+    altura_real  = max(max(ys) - min(ys), 0.01)
+
+    area, padding, topo = 480, 70, 60
+    escala = min(area / largura_real, area / altura_real)
+
+    def _transforma(p):
+        return (
+            (p[0] - min(xs)) * escala + padding,
+            (p[1] - min(ys)) * escala + padding,
+        )
+
+    pts = [_transforma(p) for p in vertices]
+    cx = sum(p[0] for p in pts) / 4
+    cy = sum(p[1] for p in pts) / 4
+    largura_total = area + padding * 2
+    altura_total  = area + padding * 2 + topo + 30
+    pontos_str = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+
+    linhas = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {largura_total:.0f} {altura_total:.0f}" '
+        f'font-family="Arial, sans-serif">',
+    ]
+    if numero_matricula:
+        linhas.append(
+            f'<text x="{largura_total/2:.0f}" y="28" font-size="16" font-weight="bold" '
+            f'text-anchor="middle" fill="#1a252f">CROQUI — MATRÍCULA Nº '
+            f'{_escapar_svg(numero_matricula)}</text>'
+        )
+    if aproximado:
+        linhas.append(
+            f'<text x="{largura_total/2:.0f}" y="46" font-size="10" font-style="italic" '
+            f'text-anchor="middle" fill="#a15c00">⚠ Ângulo(s) não informado(s) no documento — '
+            f'assumido(s) 90° (canto reto)</text>'
+        )
+    linhas.append(f'<g transform="translate(0,{topo})">')
+    linhas.append(f'<polygon points="{pontos_str}" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2.5"/>')
+
+    for i, lado in enumerate(_LADOS_CONFRONTACAO):
+        p1, p2 = pts[i], pts[(i + 1) % 4]
+        mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+        dx, dy = mx - cx, my - cy
+        dist = math.hypot(dx, dy) or 1
+        lx, ly = mx + dx / dist * 24, my + dy / dist * 24
+
+        info      = confrontacoes.get(lado) or {}
+        medida    = info.get("medida") or ""
+        descricao = info.get("descricao") or ""
+        rotulo = f"{lado.upper()}: {medida}" + (f" — {descricao}" if descricao else "")
+        linhas.append(
+            f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="11" font-weight="bold" '
+            f'fill="#1565c0" text-anchor="middle">{_escapar_svg(rotulo)}</text>'
+        )
+
+    linhas.append("</g>")
+
+    if distancia_esquina and distancia_esquina.get("distancia_m"):
+        texto = f"A {distancia_esquina['distancia_m']} m da {distancia_esquina.get('referencia') or 'esquina'}"
+        linhas.append(
+            f'<text x="{largura_total/2:.0f}" y="{altura_total - 10:.0f}" font-size="11" '
+            f'fill="#555" text-anchor="middle">{_escapar_svg(texto)}</text>'
+        )
+
+    linhas.append("</svg>")
+    return "\n".join(linhas)

@@ -22,7 +22,7 @@ from .utils import INFRA_ITENS, OPCOES_FONTE_CROQUI
 from .utils import normalizar_area, _title_grupo
 from .coordenadas import (
     normalizar_pontos, gerar_kml_bytes, gerar_shp, montar_coordenadas_de_azimutes,
-    gerar_kml_multiplo_uniao,
+    gerar_kml_multiplo_uniao, calcular_poligono_confrontacoes, gerar_svg_confrontacoes,
 )
 from .gemini import chamar_gemini, chamar_gemini_azimutes, chamar_gemini_multiplo
 from .prompts import PROMPT_NORMAL, PROMPT_ANTIGO, PROMPT_MULTIPLO
@@ -64,6 +64,8 @@ class Bridge:
         self.dados_pdf    = None
         self.sistema      = "multia"
         self.matricula       = None   # número da matrícula do imóvel
+        self.cidade_avaliacao = ""    # cidade/UF já vêm da própria avaliação (Infoel),
+        self.uf_avaliacao     = ""    # antes mesmo de analisar o PDF
         self.pasta_base      = None   # pasta base configurada pelo usuário
         self.pasta_matricula = None   # pasta da matrícula atual
         self.codigo_infoel   = None   # código infoel atual
@@ -187,12 +189,21 @@ class Bridge:
             self.uuid_atual    = av["UUID"]
             self.codigo_infoel = str(av["REG"])
             self.matricula     = str(av.get("DOCUMENTO") or av.get("documento") or "")
+            self.cidade_avaliacao = str(av.get("CIDADE") or "").strip()
+            self.uf_avaliacao     = str(av.get("UF") or "").strip().upper()
             self._log(f"✅ Encontrada: REG {av['REG']} | {av.get('CIDADE','?')}/{av.get('UF','?')}")
             self._log(f"   UUID: {self.uuid_atual}")
             if self.matricula:
                 self._log(f"   Matrícula: {self.matricula}")
             self._resetar_checklist()
             self._emit("checklist_atualizado", {"itens": self._montar_checklist()})
+
+            # Cria a pasta da matrícula já aqui, assim o KML do CAR e o croqui
+            # (gerados mais adiante) têm onde salvar em vez de cair na pasta base.
+            if self.pasta_base and self.matricula:
+                self.pasta_matricula = criar_pasta_matricula(
+                    self.pasta_base, self.matricula, log_fn=self._log
+                )
 
             self._buscar_car_da_avaliacao(av.get("CIDADE", ""), av.get("UF", ""))
 
@@ -240,7 +251,8 @@ class Bridge:
 
                 pasta = self.pasta_matricula or self.pasta_base
                 if pasta and resultado.get("pontos"):
-                    nome_arquivo = f"CAR_{str(resultado['car']).replace('/', '-')}.kml"
+                    identificador = self.matricula or self.codigo_infoel or "matricula"
+                    nome_arquivo = f"Croqui_{self._sanitizar_nome_arquivo(identificador)}.kml"
                     data = gerar_kml_bytes(resultado["pontos"], str(resultado["car"]))
                     caminho = os.path.join(pasta, nome_arquivo)
                     with open(caminho, "wb") as f:
@@ -294,7 +306,7 @@ class Bridge:
 
         def worker():
             try:
-                self._set_btn("btn-analisar", False, "🤖 Analisando...")
+                self._set_btn("btn-analisar", False, "Analisando...")
                 self._log(f"📖 Lendo PDF: {os.path.basename(self.pdf_path)}")
                 with open(self.pdf_path, "rb") as f:
                     pdf_bytes = f.read()
@@ -381,6 +393,26 @@ class Bridge:
                     self._log(f"\n Coordenadas: {npts} pontos | Formato: {fmt}{origem}")
                 else:
                     self._log("\n Coordenadas nao encontradas.")
+
+                # KML a partir das coordenadas da própria matrícula — salvo sempre que
+                # houver coordenadas, independente do CAR (Infoterras) ter sido encontrado ou não.
+                if coord and coord.get("pontos"):
+                    pasta_kml = self.pasta_matricula or self.pasta_base
+                    if pasta_kml:
+                        try:
+                            pontos_kml   = normalizar_pontos(coord)
+                            data_kml     = gerar_kml_bytes(pontos_kml, self._nome())
+                            identificador = self.matricula or self.codigo_infoel or "matricula"
+                            nome_arq_kml = f"Croqui_{self._sanitizar_nome_arquivo(identificador)}.kml"
+                            caminho_kml  = os.path.join(pasta_kml, nome_arq_kml)
+                            with open(caminho_kml, "wb") as f:
+                                f.write(data_kml)
+                            self._log(f"\n🗺️ KML salvo: {caminho_kml}")
+                        except Exception as ex_kml:
+                            self._log(f"\n⚠️ Erro ao gerar KML: {ex_kml}")
+                    else:
+                        self._log("\n⚠️ Coordenadas encontradas, mas pasta de download não configurada — KML não foi salvo.")
+
                 if tipo == "antigo":
                     grupos = dados.get("grupos_vistoria",[])
                     self._log(f"\n📦 Grupos de vistoria: {len(grupos)}")
@@ -390,24 +422,35 @@ class Bridge:
                 _tem_vaga = dados.get("vaga_garagem") is True
                 self._log(f"\n🚗 Vaga de garagem: {'Sim — mencionada na matrícula' if _tem_vaga else 'Não mencionada'}")
 
-                # Croqui SVG (esquema ilustrativo baseado nas confrontações do texto)
+                # Croqui do polígono real (a partir das confrontações; usa os ângulos do
+                # documento quando informados, senão assume canto reto e sinaliza no desenho)
                 if tipo == "normal":
-                    svg = dados.get("croqui_svg")
-                    if svg and isinstance(svg, str) and "<svg" in svg:
+                    resultado_croqui = calcular_poligono_confrontacoes(
+                        dados.get("confrontacoes"), dados.get("angulos_internos")
+                    )
+                    if resultado_croqui:
+                        pontos_croqui, aproximado = resultado_croqui
                         pasta = self.pasta_matricula or self.pasta_base
                         if pasta:
                             try:
-                                nome_arq = f"croqui_{self.codigo_infoel or 'matricula'}.svg"
+                                svg = gerar_svg_confrontacoes(
+                                    pontos_croqui, dados.get("confrontacoes") or {},
+                                    distancia_esquina=dados.get("distancia_esquina"),
+                                    numero_matricula=self.codigo_infoel or "",
+                                    aproximado=aproximado,
+                                )
+                                nome_arq = f"croqui_{self._sanitizar_nome_arquivo(self.codigo_infoel or 'matricula')}.svg"
                                 caminho = os.path.join(pasta, nome_arq)
                                 with open(caminho, "w", encoding="utf-8") as f:
                                     f.write(svg)
-                                self._log(f"\n🖼️ Croqui SVG salvo: {caminho}")
+                                aviso = " (ângulo(s) assumido(s) reto — não informado no documento)" if aproximado else ""
+                                self._log(f"\n🖼️ Croqui do polígono salvo{aviso}: {caminho}")
                             except Exception as ex_svg:
-                                self._log(f"\n⚠️ Erro ao salvar croqui SVG: {ex_svg}")
+                                self._log(f"\n⚠️ Erro ao gerar croqui: {ex_svg}")
                         else:
-                            self._log("\n⚠️ Croqui SVG gerado, mas pasta de download não configurada — não foi salvo.")
+                            self._log("\n⚠️ Croqui calculado, mas pasta de download não configurada — não foi salvo.")
                     else:
-                        self._log("\n🖼️ Croqui SVG: não foi possível gerar (confrontações insuficientes no documento).")
+                        self._log("\n🖼️ Croqui: medidas das confrontações insuficientes para desenhar — não gerado.")
 
                 self._log("\n✅ Análise concluída!")
                 self._emit("analise_concluida", {
@@ -451,20 +494,24 @@ class Bridge:
                 # Registrar na planilha e criar pasta da matrícula
                 tipo_imovel = dados.get("tipo_imovel", "URBANO")
                 creds_path  = self._credentials_path()
-                if creds_path and self.codigo_infoel and self.matricula:
+                if creds_path and self.codigo_infoel and self.matricula and self.aba_planilha:
                     self._log("\n[sheets] Registrando na planilha...")
                     registrar_laudo(creds_path, self.codigo_infoel,
                                     self.matricula, tipo_imovel, log_fn=self._log,
-                                    aba_nome=self.aba_planilha or "LEANDRO")
+                                    aba_nome=self.aba_planilha)
                 elif not creds_path:
                     self._log("\n[sheets] credentials.json não encontrado — planilha não atualizada")
                 elif not self.matricula:
                     self._log("\n[sheets] Matrícula não encontrada — planilha não atualizada")
+                elif not self.aba_planilha:
+                    self._log("\n[sheets] Aba da planilha não configurada — planilha não atualizada")
 
                 if self.pasta_base and self.matricula:
                     self.pasta_matricula = criar_pasta_matricula(
                         self.pasta_base, self.matricula, log_fn=self._log
                     )
+
+                self._salvar_analise(dados, tipo)
             except (SSLError, ReqConnError) as ex:
                 self._log(f"❌ Erro de conexão: {ex}")
                 self._log("   💡 Verifique sua conexão ou tente novamente.")
@@ -476,7 +523,7 @@ class Bridge:
                 self._log(f"❌ Erro: {ex}")
                 self._log(traceback.format_exc())
             finally:
-                self._set_btn("btn-analisar", True, "🤖 Analisar PDF com Gemini")
+                self._set_btn("btn-analisar", True, "Analisar PDF com Gemini")
 
         threading.Thread(target=worker, daemon=True).start()
         return {"ok": True}
@@ -535,7 +582,7 @@ class Bridge:
 
         def worker():
             try:
-                self._set_btn("btn-analisar", False, "🤖 Analisando...")
+                self._set_btn("btn-analisar", False, "Analisando...")
                 self._log(f"📖 Lendo {len(self.pdfs_multiplos)} PDF(s)...")
                 lista_bytes = []
                 for p in self.pdfs_multiplos:
@@ -544,95 +591,7 @@ class Bridge:
 
                 self._log("🤖 Enviando para o Gemini — aguardando resposta...")
                 resposta = chamar_gemini_multiplo(lista_bytes, PROMPT_MULTIPLO)
-                self.matriculas_dados = resposta.get("matriculas", [])
-                self.analise_confrontantes = resposta.get("analise_confrontantes") or {}
-
-                self._log(f"✅ {len(self.matriculas_dados)} matrícula(s) analisada(s):")
-                for m in self.matriculas_dados:
-                    self._log(f"   • {m.get('numero_matricula','?')} — {m.get('cidade','?')}/{m.get('uf','?')}"
-                              f" — {m.get('area_total','?')}")
-
-                if len(self.matriculas_dados) != len(self.pdfs_multiplos):
-                    self._log(
-                        f"\n⚠️⚠️⚠️ ATENÇÃO: você enviou {len(self.pdfs_multiplos)} PDF(s), mas a análise retornou "
-                        f"{len(self.matriculas_dados)} matrícula(s). Confira se algum PDF ficou de fora "
-                        f"e repita a análise se necessário."
-                    )
-
-                if len(self.matriculas_dados) > 1:
-                    conf = self.analise_confrontantes or {}
-                    explicacao = conf.get("explicacao", "")
-                    if conf.get("sao_confrontantes"):
-                        self._log("\n✅✅✅ CONFRONTANTES ✅✅✅")
-                        self._log(f"   {explicacao}")
-                    else:
-                        self._log("\n⚠️⚠️⚠️ NÃO CONFRONTANTES ⚠️⚠️⚠️")
-                        self._log(f"   {explicacao}")
-
-                # Alerta de matrícula(s) cancelada(s)/encerrada(s)
-                canceladas = matriculas_canceladas(self.matriculas_dados)
-                for item in canceladas:
-                    self._log(f"\n🚨🚨🚨 ATENÇÃO: MATRÍCULA {item['numero']} CANCELADA/ENCERRADA 🚨🚨🚨")
-                    self._log(f"   {item.get('motivo') or 'Confira o documento — indício de cancelamento encontrado.'}")
-
-                # Área — sempre mostra separada por matrícula e a soma
-                self.areas_info = calcular_areas(self.matriculas_dados)
-                self._log(f"\n─── ÁREAS ───")
-                for item in self.areas_info["itens"]:
-                    self._log(f"   Matrícula {item['numero']}: {item['area_raw']}")
-                self._log(f"   SOMA: {self.areas_info['soma']:.4f} {self.areas_info['unidade']}".replace(".", ","))
-
-                self.dados_pdf = mesclar_matriculas(self.matriculas_dados)
-                self._log("\n✅ Análise concluída — pode preencher a capa, gerar o parecer e o croqui.")
-                soma_fmt = f"{self.areas_info['soma']:.4f}".replace(".", ",") + " " + self.areas_info["unidade"]
-                self._emit("analise_multipla_concluida", {
-                    "dados": self.dados_pdf,
-                    "area_total_soma": soma_fmt,
-                    "matriculas": [
-                        {"numero": m.get("numero_matricula"), "area": m.get("area_total")}
-                        for m in self.matriculas_dados
-                    ],
-                })
-                self._set_btn("btn-kml",      True)
-                self._set_btn("btn-parecer",  True)
-                self._set_btn("btn-capa",     True)
-                self._set_btn("btn-sistemas", True)
-
-                # Registrar na planilha e criar pasta com as matrículas combinadas
-                matriculas_str = " - ".join(str(m.get("numero_matricula") or "?") for m in self.matriculas_dados)
-                tipo_imovel = self.dados_pdf.get("tipo_imovel", "URBANO")
-                creds_path  = self._credentials_path()
-                if creds_path and self.codigo_infoel:
-                    self._log("\n[sheets] Registrando na planilha...")
-                    registrar_laudo(creds_path, self.codigo_infoel,
-                                    matriculas_str, tipo_imovel, log_fn=self._log,
-                                    aba_nome=self.aba_planilha or "LEANDRO")
-                elif not creds_path:
-                    self._log("\n[sheets] credentials.json não encontrado — planilha não atualizada")
-
-                if self.pasta_base:
-                    self.pasta_matricula = criar_pasta_matricula(
-                        self.pasta_base, matriculas_str, log_fn=self._log
-                    )
-
-                # Croqui SVG por matrícula (esquema ilustrativo baseado nas confrontações do texto)
-                pasta_svg = self.pasta_matricula or self.pasta_base
-                for m in self.matriculas_dados:
-                    svg = m.get("croqui_svg")
-                    numero = m.get("numero_matricula", "?")
-                    if not (svg and isinstance(svg, str) and "<svg" in svg):
-                        continue
-                    if not pasta_svg:
-                        self._log(f"\n⚠️ Croqui SVG da matrícula {numero} gerado, mas pasta de download não configurada — não foi salvo.")
-                        continue
-                    try:
-                        nome_arq = f"croqui_{str(numero).replace('/', '-')}.svg"
-                        caminho = os.path.join(pasta_svg, nome_arq)
-                        with open(caminho, "w", encoding="utf-8") as f:
-                            f.write(svg)
-                        self._log(f"\n🖼️ Croqui SVG salvo (matrícula {numero}): {caminho}")
-                    except Exception as ex_svg:
-                        self._log(f"\n⚠️ Erro ao salvar croqui SVG da matrícula {numero}: {ex_svg}")
+                self._processar_resposta_multipla(resposta, checar_qtd_pdfs=True)
             except (SSLError, ReqConnError) as ex:
                 self._log(f"❌ Erro de conexão: {ex}")
             except Timeout as ex:
@@ -642,10 +601,172 @@ class Bridge:
                 self._log(f"❌ Erro: {ex}")
                 self._log(traceback.format_exc())
             finally:
-                self._set_btn("btn-analisar", True, "🤖 Analisar PDF com Gemini")
+                self._set_btn("btn-analisar", True, "Analisar PDF com Gemini")
 
         threading.Thread(target=worker, daemon=True).start()
         return {"ok": True}
+
+    def _processar_resposta_multipla(self, resposta: dict, checar_qtd_pdfs: bool):
+        """Processa o resultado da análise múltipla — mescla os dados, calcula
+        áreas, registra na planilha, cria a pasta combinada e gera os croquis.
+        Usado tanto pela chamada real ao Gemini quanto pelo JSON colado manualmente.
+        """
+        self.matriculas_dados = resposta.get("matriculas", [])
+        self.analise_confrontantes = resposta.get("analise_confrontantes") or {}
+
+        self._log(f"✅ {len(self.matriculas_dados)} matrícula(s) analisada(s):")
+        for m in self.matriculas_dados:
+            self._log(f"   • {m.get('numero_matricula','?')} — {m.get('cidade','?')}/{m.get('uf','?')}"
+                      f" — {m.get('area_total','?')}")
+
+        if checar_qtd_pdfs and len(self.matriculas_dados) != len(self.pdfs_multiplos):
+            self._log(
+                f"\n⚠️⚠️⚠️ ATENÇÃO: você enviou {len(self.pdfs_multiplos)} PDF(s), mas a análise retornou "
+                f"{len(self.matriculas_dados)} matrícula(s). Confira se algum PDF ficou de fora "
+                f"e repita a análise se necessário."
+            )
+
+        if len(self.matriculas_dados) > 1:
+            conf = self.analise_confrontantes or {}
+            explicacao = conf.get("explicacao", "")
+            if conf.get("sao_confrontantes"):
+                self._log("\n✅✅✅ CONFRONTANTES ✅✅✅")
+                self._log(f"   {explicacao}")
+            else:
+                self._log("\n⚠️⚠️⚠️ NÃO CONFRONTANTES ⚠️⚠️⚠️")
+                self._log(f"   {explicacao}")
+
+        # Alerta de matrícula(s) cancelada(s)/encerrada(s)
+        canceladas = matriculas_canceladas(self.matriculas_dados)
+        for item in canceladas:
+            self._log(f"\n🚨🚨🚨 ATENÇÃO: MATRÍCULA {item['numero']} CANCELADA/ENCERRADA 🚨🚨🚨")
+            self._log(f"   {item.get('motivo') or 'Confira o documento — indício de cancelamento encontrado.'}")
+
+        # Área — sempre mostra separada por matrícula e a soma
+        self.areas_info = calcular_areas(self.matriculas_dados)
+        self._log(f"\n─── ÁREAS ───")
+        for item in self.areas_info["itens"]:
+            self._log(f"   Matrícula {item['numero']}: {item['area_raw']}")
+        self._log(f"   SOMA: {self.areas_info['soma']:.4f} {self.areas_info['unidade']}".replace(".", ","))
+
+        self.dados_pdf = mesclar_matriculas(self.matriculas_dados)
+        self._log("\n✅ Análise concluída — pode preencher a capa, gerar o parecer e o croqui.")
+        soma_fmt = f"{self.areas_info['soma']:.4f}".replace(".", ",") + " " + self.areas_info["unidade"]
+        self._emit("analise_multipla_concluida", {
+            "dados": self.dados_pdf,
+            "area_total_soma": soma_fmt,
+            "matriculas": [
+                {"numero": m.get("numero_matricula"), "area": m.get("area_total")}
+                for m in self.matriculas_dados
+            ],
+        })
+        self._set_btn("btn-kml",      True)
+        self._set_btn("btn-parecer",  True)
+        self._set_btn("btn-capa",     True)
+        self._set_btn("btn-sistemas", True)
+
+        # Registrar na planilha e criar pasta com as matrículas combinadas
+        matriculas_str = " - ".join(str(m.get("numero_matricula") or "?") for m in self.matriculas_dados)
+        tipo_imovel = self.dados_pdf.get("tipo_imovel", "URBANO")
+        creds_path  = self._credentials_path()
+        if creds_path and self.codigo_infoel and self.aba_planilha:
+            self._log("\n[sheets] Registrando na planilha...")
+            registrar_laudo(creds_path, self.codigo_infoel,
+                            matriculas_str, tipo_imovel, log_fn=self._log,
+                            aba_nome=self.aba_planilha)
+        elif not creds_path:
+            self._log("\n[sheets] credentials.json não encontrado — planilha não atualizada")
+        elif not self.aba_planilha:
+            self._log("\n[sheets] Aba da planilha não configurada — planilha não atualizada")
+
+        if self.pasta_base:
+            self.pasta_matricula = criar_pasta_matricula(
+                self.pasta_base, matriculas_str, log_fn=self._log
+            )
+
+        self._salvar_analise(resposta, "multiplo")
+
+        # Croqui do polígono real por matrícula (usa os ângulos do documento quando
+        # informados, senão assume canto reto e sinaliza no desenho)
+        pasta_svg = self.pasta_matricula or self.pasta_base
+        for m in self.matriculas_dados:
+            numero = m.get("numero_matricula", "?")
+            resultado_croqui = calcular_poligono_confrontacoes(
+                m.get("confrontacoes"), m.get("angulos_internos")
+            )
+            if not resultado_croqui:
+                continue
+            pontos_croqui, aproximado = resultado_croqui
+            if not pasta_svg:
+                self._log(f"\n⚠️ Croqui da matrícula {numero} calculado, mas pasta de download não configurada — não foi salvo.")
+                continue
+            try:
+                svg = gerar_svg_confrontacoes(
+                    pontos_croqui, m.get("confrontacoes") or {},
+                    distancia_esquina=m.get("distancia_esquina"),
+                    numero_matricula=str(numero),
+                    aproximado=aproximado,
+                )
+                nome_arq = f"croqui_{self._sanitizar_nome_arquivo(numero)}.svg"
+                caminho = os.path.join(pasta_svg, nome_arq)
+                with open(caminho, "w", encoding="utf-8") as f:
+                    f.write(svg)
+                aviso = " (ângulo(s) assumido(s) reto)" if aproximado else ""
+                self._log(f"\n🖼️ Croqui salvo{aviso} (matrícula {numero}): {caminho}")
+            except Exception as ex_svg:
+                self._log(f"\n⚠️ Erro ao gerar croqui da matrícula {numero}: {ex_svg}")
+
+    def processar_json_manual_multiplo(self, json_str: str):
+        """Processa um JSON colado manualmente no formato da análise múltipla
+        (mesmo formato do PROMPT_MULTIPLO: {matriculas: [...], analise_confrontantes: {...}})."""
+        import json as _json
+        import re as _re
+        try:
+            clean = _re.sub(r"```json\s*", "", json_str)
+            clean = _re.sub(r"```\s*", "", clean).strip()
+            s = clean.find("{"); e = clean.rfind("}") + 1
+            if s == -1:
+                return {"ok": False, "msg": "JSON inválido — não encontrado objeto { }"}
+            resposta = _json.loads(clean[s:e])
+            self._processar_resposta_multipla(resposta, checar_qtd_pdfs=False)
+            return {"ok": True}
+        except Exception as ex:
+            import traceback
+            self._log(f"❌ Erro: {ex}")
+            self._log(traceback.format_exc())
+            return {"ok": False, "msg": str(ex)}
+
+    def carregar_analise_salva(self):
+        """Carrega a análise salva anteriormente para a matrícula atual (se
+        existir), sem chamar o Gemini de novo. Veja _salvar_analise."""
+        pasta = self.pasta_matricula or self.pasta_base
+        if not pasta:
+            return {"ok": False, "msg": "Pasta da matrícula não encontrada. Busque o código ou analise um PDF primeiro."}
+
+        caminho = os.path.join(pasta, "_analise_mpa.json")
+        if not os.path.exists(caminho):
+            return {"ok": False, "msg": "Nenhuma análise salva encontrada para essa matrícula."}
+
+        try:
+            with open(caminho, "r", encoding="utf-8") as f:
+                salvo = json.load(f)
+            tipo  = salvo.get("tipo", "normal")
+            dados = salvo.get("dados")
+            if not dados:
+                return {"ok": False, "msg": "Arquivo de análise salva está vazio ou corrompido."}
+
+            self._log(f"\n📂 Carregando análise salva ({tipo})...")
+            if tipo == "multiplo":
+                self._processar_resposta_multipla(dados, checar_qtd_pdfs=False)
+            else:
+                self.processar_json_manual(json.dumps(dados), tipo)
+            self._log("✅ Análise salva carregada — nenhuma chamada ao Gemini foi feita.")
+            return {"ok": True, "tipo": tipo}
+        except Exception as ex:
+            import traceback
+            self._log(f"❌ Erro ao carregar análise salva: {ex}")
+            self._log(traceback.format_exc())
+            return {"ok": False, "msg": str(ex)}
 
     # ── KML / SHP ────────────────────────────────────────────────
     def gerar_kml(self):
@@ -717,7 +838,7 @@ class Bridge:
                     return
 
                 data = gerar_kml_multiplo_uniao(poligonos)
-                nomes = "_".join(p["label"].replace("/", "-") for p in poligonos)
+                nomes = "_".join(self._sanitizar_nome_arquivo(p["label"]) for p in poligonos)
                 nome_arquivo = f"KML_{nomes}.kml" if len(nomes) < 100 else f"KML_{len(poligonos)}_matriculas.kml"
                 destino = self.pasta_matricula if self.pasta_matricula else pasta
                 path = os.path.join(destino, nome_arquivo)
@@ -904,8 +1025,10 @@ class Bridge:
         SPREADSHEET_SISTEMAS = "1IZAMNvgR6P1p2F_gYacRkhl7xR84UnM8Fb_Mayzxfyw"
 
         d      = self.dados_pdf or {}
-        cidade = d.get("cidade", "").strip()
-        uf     = d.get("uf", "").strip().upper()
+        # Cidade/UF já vêm da própria avaliação (Infoel) assim que o código é buscado —
+        # usa o que o PDF confirmar, e cai para a da avaliação se ainda não analisou.
+        cidade = (d.get("cidade") or "").strip() or self.cidade_avaliacao
+        uf     = ((d.get("uf") or "").strip() or self.uf_avaliacao).upper()
         tipo   = d.get("tipo_imovel", "URBANO").upper()
 
         if not cidade or not uf:
@@ -1432,7 +1555,9 @@ class Bridge:
     # ── JSON Manual ───────────────────────────────────────────────
     def get_prompt(self, tipo: str) -> str:
         """Retorna o prompt que seria enviado ao Gemini."""
-        from .prompts import PROMPT_NORMAL, PROMPT_ANTIGO
+        from .prompts import PROMPT_NORMAL, PROMPT_ANTIGO, PROMPT_MULTIPLO
+        if tipo == "multiplo":
+            return PROMPT_MULTIPLO
         return PROMPT_NORMAL if tipo == "normal" else PROMPT_ANTIGO
 
     def processar_json_manual(self, json_str: str, tipo: str):
@@ -1483,11 +1608,13 @@ class Bridge:
             # Registrar planilha e criar pasta
             tipo_imovel = dados.get("tipo_imovel", "URBANO")
             creds_path  = self._credentials_path()
-            if creds_path and self.codigo_infoel and self.matricula:
+            if creds_path and self.codigo_infoel and self.matricula and self.aba_planilha:
                 from .sheets import registrar_laudo, criar_pasta_matricula
                 registrar_laudo(creds_path, self.codigo_infoel,
                                 self.matricula, tipo_imovel, log_fn=self._log,
-                                aba_nome=self.aba_planilha or "LEANDRO")
+                                aba_nome=self.aba_planilha)
+            elif not self.aba_planilha:
+                self._log("\n[sheets] Aba da planilha não configurada — planilha não atualizada")
             if self.pasta_base and self.matricula:
                 from .sheets import criar_pasta_matricula
                 self.pasta_matricula = criar_pasta_matricula(
@@ -1497,6 +1624,7 @@ class Bridge:
             # Log vaga de garagem (campo do JSON)
             _tem_vaga_j = dados.get("vaga_garagem") is True
             self._log(f"\n🚗 Vaga de garagem: {'Sim — mencionada na matrícula' if _tem_vaga_j else 'Não mencionada'}")
+            self._salvar_analise(dados, tipo)
             self._log("\n✅ JSON processado com sucesso!")
             return {"ok": True}
 
@@ -1599,7 +1727,25 @@ class Bridge:
                     else:
                         self._log(f"   ⚠️ Arquivo de assinatura não encontrado na pasta dos CUBs")
 
-                # ── 3. Anexar arquivo "centro" ─────────────────────
+                # ── 3. Anexar arquivo(s) "car"/"demonstrativo" como CAR ──
+                car_paths = []
+                for fname in os.listdir(self.pasta_matricula):
+                    nome_sem_ext = os.path.splitext(fname)[0].lower()
+                    if not fname.lower().endswith(".pdf"):
+                        continue
+                    if "car" in nome_sem_ext or "demonstrativo" in nome_sem_ext:
+                        car_paths.append(os.path.join(self.pasta_matricula, fname))
+                if car_paths:
+                    for path in car_paths:
+                        with open(path, "rb") as f:
+                            car_bytes = f.read()
+                        self.api.anexar_arquivo(self.uuid_atual, car_bytes,
+                                                os.path.basename(path), "CAR")
+                        self._log(f"   ✔ '{os.path.basename(path)}' anexado como 'CAR'")
+                else:
+                    self._log("   ⚠️ Arquivo com 'car' ou 'demonstrativo' no nome não encontrado na pasta")
+
+                # ── 4. Anexar arquivo "centro" ──────────────────────
                 centro_path = None
                 for fname in os.listdir(self.pasta_matricula):
                     nome_sem_ext = os.path.splitext(fname)[0].lower()
@@ -1615,7 +1761,7 @@ class Bridge:
                 else:
                     self._log("   ⚠️ Arquivo com 'centro' no nome não encontrado na pasta")
 
-                # ── 4. Anexar arquivos por palavra-chave ───────────
+                # ── 5. Anexar arquivos por palavra-chave ───────────
                 MAPA_PALAVRAS = {
                     "bci":                 "BCI",
                     "geo":                 "SISTEMA DE INFORMAÇÕES MUNICIPAIS GEORREFERENCIADAS",
@@ -1649,7 +1795,7 @@ class Bridge:
                     descricoes_usadas.add(descricao)
                     self._log(f"   ✔ '{fname}' anexado como '{descricao}'")
 
-                # ── 5. Excluir fotos existentes do croqui ─────────
+                # ── 6. Excluir fotos existentes do croqui ─────────
                 try:
                     dados_croqui = self.api.buscar_dados_avaliacao(self.uuid_atual)
                     arquivos_todos = dados_croqui.get("arquivos", [])
@@ -1658,7 +1804,7 @@ class Bridge:
                                    and a.get("DESCRICAO","").upper() not in
                                    ("CUB","TRAJETO ATÉ O CENTRO","MATRÍCULA","BCI",
                                     "SISTEMA DE INFORMAÇÕES MUNICIPAIS GEORREFERENCIADAS",
-                                    "IPTU","HIDROGRAFIA","MAPA DE INUNDAÇÃO")]
+                                    "IPTU","HIDROGRAFIA","MAPA DE INUNDAÇÃO","CAR")]
                     # Busca imagens do croqui via endpoint de vistoria
                     dados_vist = self.api.buscar_vistoria(self.uuid_atual)
                     imgs_croqui_reg = []
@@ -1672,7 +1818,7 @@ class Bridge:
                 except Exception as _ec:
                     self._log(f"   ⚠️ Erro ao limpar croqui: {_ec}")
 
-                # ── 6. Fotos do croqui (1 a 6) ────────────────────
+                # ── 7. Fotos do croqui (1 a 6) ────────────────────
                 EXTENSOES_IMG = {".jpg", ".jpeg", ".png"}
                 fotos_enviadas = 0
                 for i in range(1, 7):
@@ -1792,6 +1938,63 @@ class Bridge:
         d   = self.dados_pdf or {}
         raw = f"{d.get('endereco','croqui')}_{d.get('numero','')}".strip("_")
         return re.sub(r"[^\w\-]","_", raw)[:60] or "croqui"
+
+    @staticmethod
+    def _sanitizar_nome_arquivo(valor) -> str:
+        """Sanitiza um valor (ex: número de matrícula) para uso seguro em nome
+        de arquivo/pasta no Windows — remove quebra de linha e caracteres inválidos.
+        Campos como o "DOCUMENTO" do Infoel podem trazer mais de uma matrícula
+        separadas por quebra de linha; isso vira " - " em vez de quebrar o caminho.
+        """
+        texto = str(valor)
+        texto = re.sub(r"[\r\n]+", " - ", texto)
+        texto = texto.replace("/", "-").replace("\\", "-")
+        texto = re.sub(r'[<>:"|?*]', "", texto)
+        return re.sub(r"\s+", " ", texto).strip()
+
+    def _com_cidade_uf_preenchidos(self, dados: dict, tipo: str) -> dict:
+        """Preenche cidade/UF com os valores da própria avaliação (Infoel)
+        quando o PDF não trouxer esses campos claramente — sem alterar os
+        dados em memória (self.dados_pdf / self.matriculas_dados), só a cópia
+        que vai para o arquivo salvo.
+        """
+        if not self.cidade_avaliacao and not self.uf_avaliacao:
+            return dados
+        if tipo == "multiplo":
+            copia = dict(dados)
+            novas = []
+            for m in (dados.get("matriculas") or []):
+                m2 = dict(m)
+                if not m2.get("cidade"):
+                    m2["cidade"] = self.cidade_avaliacao
+                if not m2.get("uf"):
+                    m2["uf"] = self.uf_avaliacao
+                novas.append(m2)
+            copia["matriculas"] = novas
+            return copia
+        copia = dict(dados)
+        if not copia.get("cidade"):
+            copia["cidade"] = self.cidade_avaliacao
+        if not copia.get("uf"):
+            copia["uf"] = self.uf_avaliacao
+        return copia
+
+    def _salvar_analise(self, dados: dict, tipo: str) -> None:
+        """Salva o resultado de uma análise na pasta da matrícula, para poder
+        recarregar depois (botão "Carregar Análise Salva") sem chamar o Gemini
+        de novo. Silencioso se não houver pasta configurada — não é um passo
+        crítico do fluxo.
+        """
+        pasta = self.pasta_matricula or self.pasta_base
+        if not pasta:
+            return
+        try:
+            dados_para_salvar = self._com_cidade_uf_preenchidos(dados, tipo)
+            caminho = os.path.join(pasta, "_analise_mpa.json")
+            with open(caminho, "w", encoding="utf-8") as f:
+                json.dump({"tipo": tipo, "dados": dados_para_salvar}, f, ensure_ascii=False, indent=2)
+        except Exception as ex:
+            self._log(f"\n⚠️ Erro ao salvar análise para reaproveitar depois: {ex}")
 
 
 # ──────────────────────────────────────────────────────────────

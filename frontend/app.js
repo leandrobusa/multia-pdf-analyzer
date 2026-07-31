@@ -5,7 +5,6 @@ const state = {
   tipoLaudo:   'normal',
   sistema:     'multia',
   temCoords:   false,
-  coordsUTM:   false,
   vagasCount:  0,
   divisoesAtivas: new Set(['Área Útil']),
   areaTotal:   '',
@@ -18,11 +17,28 @@ const state = {
   modoArea: 'somar',        // 'somar' ou 'dividir' (divisões de área no modo múltiplo)
 };
 
-// ── Tema (claro/escuro — alterna só na sessão atual) ───────────
-function toggleTema() {
-  const claro = document.body.classList.toggle('theme-light');
-  document.getElementById('btn-tema').textContent = claro ? '🌙 Tema Escuro' : '☀️ Tema Claro';
+// ── Tema (claro/escuro — persiste entre sessões via localStorage) ──
+const TEMA_STORAGE_KEY = 'multia_tema';
+const ICON_SOL = '<svg class="btn-icon btn-icon--sm" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="3"/><line x1="9" y1="1.5" x2="9" y2="3.2"/><line x1="9" y1="14.8" x2="9" y2="16.5"/><line x1="1.5" y1="9" x2="3.2" y2="9"/><line x1="14.8" y1="9" x2="16.5" y2="9"/><line x1="3.6" y1="3.6" x2="4.8" y2="4.8"/><line x1="13.2" y1="13.2" x2="14.4" y2="14.4"/><line x1="3.6" y1="14.4" x2="4.8" y2="13.2"/><line x1="13.2" y1="4.8" x2="14.4" y2="3.6"/></svg>';
+const ICON_LUA = '<svg class="btn-icon btn-icon--sm" viewBox="0 0 18 18" aria-hidden="true"><path d="M14.5 10.5A6 6 0 1 1 7.5 3.5a5 5 0 0 0 7 7z"/></svg>';
+
+function aplicarTema(claro) {
+  document.body.classList.toggle('theme-light', claro);
+  const btn = document.getElementById('btn-tema');
+  btn.innerHTML = (claro ? ICON_LUA : ICON_SOL) +
+    '<span class="btn-label">' + (claro ? 'Tema Escuro' : 'Tema Claro') + '</span>';
 }
+
+function toggleTema() {
+  const claro = !document.body.classList.contains('theme-light');
+  aplicarTema(claro);
+  localStorage.setItem(TEMA_STORAGE_KEY, claro ? 'claro' : 'escuro');
+}
+
+// Aplica o tema salvo antes de qualquer outra coisa, pra não "piscar" escuro e depois claro
+(function iniciarTema() {
+  if (localStorage.getItem(TEMA_STORAGE_KEY) === 'claro') aplicarTema(true);
+})();
 
 // ── Inicialização ─────────────────────────────────────────────
 window.addEventListener('pywebviewready', async () => {
@@ -60,10 +76,8 @@ function onEvent(event, data) {
   if (event === 'analise_concluida') {
     state.dadosPDF  = data.dados;
     state.temCoords = data.tem_coords;
-    state.coordsUTM = data.coords_utm;
     state.areaTotal = (data.dados || {}).area_total || '';
     setBtn('btn-kml',     data.tem_coords);
-    setBtn('btn-shp',     data.coords_utm);
     setBtn('btn-parecer', true);
     setBtn('btn-capa',    true);
     setBtn('btn-sistemas', true);
@@ -104,8 +118,8 @@ function renderizarChecklist(itens) {
     } else {
       const cb = document.createElement('input');
       cb.type = 'checkbox';
+      cb.className = 'checklist-checkbox';
       cb.checked = !!item.feito;
-      cb.style.cssText = 'width:20px;height:20px;cursor:pointer;flex-shrink:0;accent-color:var(--green);';
       cb.addEventListener('change', () => onToggleChecklist(item, cb));
       row.appendChild(cb);
     }
@@ -116,7 +130,7 @@ function renderizarChecklist(itens) {
     const label = document.createElement('span');
     label.textContent = item.label;
     label.style.cssText = `font-size:14px;font-weight:${concluido ? '700' : '500'};` +
-      `color:${item.na ? 'var(--muted-dark)' : 'white'};${item.na ? 'text-decoration:line-through;' : ''}`;
+      `color:${item.na ? 'var(--muted-dark)' : 'var(--hover-text)'};${item.na ? 'text-decoration:line-through;' : ''}`;
     textoWrap.appendChild(label);
 
     if (item.chave === 'edificacoes') {
@@ -130,10 +144,10 @@ function renderizarChecklist(itens) {
 
     row.appendChild(textoWrap);
 
-    if (item.feito && item.origem) {
+    if (item.feito && item.origem === 'auto') {
       const selo = document.createElement('span');
-      selo.textContent = item.origem === 'auto' ? '🤖' : '✍️';
-      selo.title = item.origem === 'auto' ? 'Marcado automaticamente pelo MPA' : 'Marcado manualmente';
+      selo.textContent = '🤖';
+      selo.title = 'Marcado automaticamente pelo MPA';
       selo.style.cssText = 'font-size:16px;flex-shrink:0;';
       row.appendChild(selo);
     }
@@ -175,7 +189,12 @@ function setBtn(id, enabled, text=null) {
   const el = document.getElementById(id);
   if (!el) return;
   el.disabled = !enabled;
-  if (text) el.textContent = text;
+  if (text) {
+    const label = el.querySelector('.btn-label');
+    if (label) label.textContent = text;
+    else el.textContent = text;
+    el.classList.toggle('is-loading', !enabled);
+  }
 }
 
 // ── Sistema ───────────────────────────────────────────────────
@@ -203,6 +222,7 @@ async function buscar() {
   if (r.ok) {
     setStatus('status-busca', `REG ${r.reg} — ${r.cidade}/${r.uf}`, 'ok');
     if (state.dadosPDF) setBtn('btn-capa', true);
+    if (r.cidade && r.cidade !== '?' && r.uf && r.uf !== '?') setBtn('btn-sistemas', true);
   } else {
     setStatus('status-busca', `⚠️ ${r.msg}`, 'erro');
   }
@@ -246,7 +266,7 @@ async function analisarPDF() {
   state.tipoLaudo = document.querySelector('[name=tipo-laudo]:checked').value;
   // Rastrear código no momento da análise
   state.codigoNoMomento = document.getElementById('input-busca').value.trim();
-  setBtn('btn-analisar', false, '🤖 Analisando...');
+  setBtn('btn-analisar', false, 'Analisando...');
   await pywebview.api.analisar_pdf(state.tipoLaudo);
 }
 
@@ -256,8 +276,6 @@ function onToggleModoMultiplo(ativo) {
   document.getElementById('pdf-unico-wrap').style.display    = ativo ? 'none' : '';
   document.getElementById('pdf-multiplo-wrap').style.display = ativo ? '' : 'none';
   document.getElementById('radio-tipo-laudo').style.display  = ativo ? 'none' : '';
-  const btnJson = document.getElementById('btn-json-manual');
-  if (btnJson) btnJson.style.display = ativo ? 'none' : '';
   pywebview.api.ativar_modo_multiplo(ativo);
   renderizarPdfsMultiplos([]);
 }
@@ -296,9 +314,8 @@ async function removerPdfMultiplo(idx) {
   if (r.pdfs) renderizarPdfsMultiplos(r.pdfs);
 }
 
-// ── KML / SHP ─────────────────────────────────────────────────
+// ── KML ───────────────────────────────────────────────────────
 async function gerarKML() { await pywebview.api.gerar_kml(); }
-async function gerarSHP()  { await pywebview.api.gerar_shp(); }
 
 // ── Capa ──────────────────────────────────────────────────────
 async function preencherCapa() {
@@ -1604,8 +1621,8 @@ async function abrirSistemas() {
     return;
   }
 
-  document.getElementById('sistemas-titulo').textContent =
-    `🔗 Sistemas Disponíveis — ${r.cidade}/${r.uf}`;
+  document.querySelector('#sistemas-titulo .btn-label').textContent =
+    `Sistemas Disponíveis — ${r.cidade}/${r.uf}`;
 
   const lista    = document.getElementById('sistemas-lista');
   lista.innerHTML = '';
@@ -1689,12 +1706,16 @@ function criarCardSistema(s) {
   }
 
   const btnCopiar = document.createElement('button');
-  btnCopiar.className   = 'btn btn-primary';
-  btnCopiar.textContent = '📋 Copiar Link';
-  btnCopiar.onclick     = () => {
+  btnCopiar.className = 'btn btn-primary';
+  btnCopiar.innerHTML =
+    '<svg class="btn-icon" viewBox="0 0 18 18" aria-hidden="true"><rect x="4" y="3" width="10" height="13" rx="1.5"/>' +
+    '<rect x="6.5" y="1.5" width="5" height="3" rx="1"/><line x1="6.5" y1="8" x2="11.5" y2="8"/>' +
+    '<line x1="6.5" y1="11" x2="11.5" y2="11"/></svg><span class="btn-label">Copiar Link</span>';
+  const btnCopiarLabel = btnCopiar.querySelector('.btn-label');
+  btnCopiar.onclick = () => {
     navigator.clipboard.writeText(s.link).then(() => {
-      btnCopiar.textContent = '✔ Copiado!';
-      setTimeout(() => btnCopiar.textContent = '📋 Copiar Link', 2000);
+      btnCopiarLabel.textContent = 'Copiado!';
+      setTimeout(() => btnCopiarLabel.textContent = 'Copiar Link', 2000);
     });
   };
   acoes.appendChild(btnCopiar);
@@ -1713,9 +1734,13 @@ function fecharSistemas() {
 // ══════════════════════════════════════════════════════════════
 
 async function abrirJsonManual() {
-  // Carregar prompt do tipo selecionado
-  const tipo = document.querySelector('[name=tipo-laudo]:checked')?.value || 'normal';
-  document.querySelector('[name=json-tipo][value=' + tipo + ']').checked = true;
+  document.getElementById('json-tipo-laudo-wrap').style.display  = state.modoMultiplo ? 'none' : '';
+  document.getElementById('json-multiplo-aviso').style.display   = state.modoMultiplo ? '' : 'none';
+  if (!state.modoMultiplo) {
+    // Carregar prompt do tipo selecionado
+    const tipo = document.querySelector('[name=tipo-laudo]:checked')?.value || 'normal';
+    document.querySelector('[name=json-tipo][value=' + tipo + ']').checked = true;
+  }
   await carregarPromptJson();
   document.getElementById('json-manual-input').value = '';
   document.getElementById('json-erro').style.display = 'none';
@@ -1723,7 +1748,7 @@ async function abrirJsonManual() {
 }
 
 async function carregarPromptJson() {
-  const tipo   = document.querySelector('[name=json-tipo]:checked')?.value || 'normal';
+  const tipo   = state.modoMultiplo ? 'multiplo' : (document.querySelector('[name=json-tipo]:checked')?.value || 'normal');
   const prompt = await pywebview.api.get_prompt(tipo);
   document.getElementById('json-prompt-display').value = prompt;
 }
@@ -1738,9 +1763,9 @@ document.addEventListener('DOMContentLoaded', () => {
 function copiarPrompt() {
   const txt = document.getElementById('json-prompt-display').value;
   navigator.clipboard.writeText(txt).then(() => {
-    const btn = event.target;
-    btn.textContent = '✔ Copiado!';
-    setTimeout(() => btn.textContent = '📋 Copiar', 2000);
+    const label = event.currentTarget.querySelector('.btn-label');
+    label.textContent = 'Copiado!';
+    setTimeout(() => label.textContent = 'Copiar', 2000);
   });
 }
 
@@ -1753,7 +1778,6 @@ async function processarJsonManual() {
   state.codigoNoMomento = document.getElementById('input-busca').value.trim();
   state.pdfsAnalisados++;
   const jsonStr = document.getElementById('json-manual-input').value.trim();
-  const tipo    = document.querySelector('[name=json-tipo]:checked')?.value || 'normal';
   const erroEl  = document.getElementById('json-erro');
 
   if (!jsonStr) {
@@ -1763,9 +1787,15 @@ async function processarJsonManual() {
   }
 
   erroEl.style.display = 'none';
-  state.tipoLaudo = tipo;
 
-  const r = await pywebview.api.processar_json_manual(jsonStr, tipo);
+  let r;
+  if (state.modoMultiplo) {
+    r = await pywebview.api.processar_json_manual_multiplo(jsonStr);
+  } else {
+    const tipo = document.querySelector('[name=json-tipo]:checked')?.value || 'normal';
+    state.tipoLaudo = tipo;
+    r = await pywebview.api.processar_json_manual(jsonStr, tipo);
+  }
 
   if (!r.ok) {
     erroEl.textContent   = `❌ ${r.msg}`;
@@ -1775,6 +1805,24 @@ async function processarJsonManual() {
 
   fecharJsonManual();
   addLog('✅ JSON manual processado com sucesso!');
+}
+
+async function carregarAnaliseSalva() {
+  // Salvar código e contador igual ao Gemini
+  state.codigoNoMomento = document.getElementById('input-busca').value.trim();
+  state.pdfsAnalisados++;
+
+  const r = await pywebview.api.carregar_analise_salva();
+
+  if (!r.ok) {
+    addLog(`⚠️ ${r.msg}`);
+    return;
+  }
+
+  if (r.tipo && r.tipo !== 'multiplo') {
+    state.tipoLaudo = r.tipo;
+  }
+  addLog('✅ Análise salva carregada com sucesso!');
 }
 
 

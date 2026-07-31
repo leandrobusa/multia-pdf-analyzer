@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 from typing import Callable, Optional
 from urllib.parse import quote as url_quote
 
@@ -199,7 +200,14 @@ def criar_pasta_matricula(
         if log_fn:
             log_fn(msg)
 
-    nome_pasta = str(matricula).replace("/", "-").replace("\\", "-").strip()
+    nome_pasta = str(matricula)
+    # Campos como "DOCUMENTO" do Infoel podem trazer mais de uma matrícula
+    # separadas por quebra de linha (ex: avaliação que cobre 2 matrículas) —
+    # vira " - " em vez de quebrar o caminho no Windows.
+    nome_pasta = re.sub(r"[\r\n]+", " - ", nome_pasta)
+    nome_pasta = nome_pasta.replace("/", "-").replace("\\", "-")
+    nome_pasta = re.sub(r'[<>:"|?*]', "", nome_pasta)
+    nome_pasta = re.sub(r"\s+", " ", nome_pasta).strip()
     caminho    = os.path.join(pasta_base, nome_pasta)
 
     if not os.path.exists(caminho):
